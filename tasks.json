@@ -1,0 +1,27 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "STM32: Build",
+            "type": "shell",
+            "command": "bash",
+            "args": [
+                "-c",
+                "cd \"${workspaceFolder}\" && cube cmake --preset Debug && cube cmake --build build/Debug"
+            ],
+            "problemMatcher": []
+        },
+        {
+            "label": "STM32: Build, Flash and Run",
+            "type": "shell",
+            "command": "bash",
+            "args": [
+                "-c",
+                "ELF=$(find \"${workspaceFolder}/build/Debug\" -type f -name \\*.elf -print -quit); if [ -z \"$ELF\" ]; then echo \"ERROR: No ELF file found\"; exit 1; fi; echo \"Flashing: $ELF\"; cube programmer -c port=SWD -d \"$ELF\" --start 0x08000000"
+            ],
+            "dependsOn": "STM32: Build",
+            "dependsOrder": "sequence",
+            "problemMatcher": []
+        }
+    ]
+}
