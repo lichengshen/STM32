@@ -28,9 +28,10 @@ I2S3 TX uses circular DMA on DMA1 Stream 7, with a 32 KiB ordinary-SRAM buffer
 split into two 16 KiB halves. DMA callbacks only record which half became free;
 the foreground player refills that half from FatFs. This is the same two-buffer
 streaming principle as ST's example, without restarting normal-mode DMA for
-each buffer.
-(Note: The Audio_playback_and_record example in STM32Cube uses the ping-pong buffer approach, but uses normal-mode DMA.) The DMA buffer resides in normal SRAM, not CCM RAM, because DMA1
+each buffer. The DMA buffer resides in normal SRAM, not CCM RAM, because DMA1
 cannot access the STM32F407's CCM region.
+
+Note: The Audio_playback_and_record example in STM32Cube uses the ping-pong buffer approach, but uses normal-mode DMA. It uses the STM32F4-Discovery BSP provided in STM32Cube, which in turn uses the CS43L22 component driver. Here we implemented our own CS43L22 driver.
 
 ## Hardware
 
