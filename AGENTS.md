@@ -1,7 +1,7 @@
 Below provides the development environment and information common to all projects in this repository. Each project may have additional information specific to that project.
 
 ## Hardware
-This project uses the STM32F407G-DISC1 discovery kit.
+This project uses the STM32F407G-DISC1 discovery kit. It is the MB997E model, with the STM32F407 MCU.
 
 The discovery kit is also connected with a 2.4-inch TFT LCD 240x320 ILI9341 display via SPI. The pins are connected as:
 | ILI9341 | Discovery Pin | STM32 Pin |
@@ -30,6 +30,8 @@ A USB flash drive is connected to the discovery kit, plugged into the CN5 connec
 Unless otherwise specified, the project code template was generated with STM32CubeMX using the Board Selector and choosing STM32F407G-DISC1, with all peripherals initialized with default mode. Toolchain/IDE is set to CMake.
 
 Note that we may need to regenerate code if we need to change the configuration of the peripherals. Make sure the code will not get overwritten if we regenerate code later. Before implementing a feature, first check if any configuration changes are needed. If any changes are needed, do not manually modify the .ioc file. STM32CubeMX should be used to reconfigure and regenerate the code.
+
+When some functionality has a well-established library available, prefer using the libraries instead of implementing the functionality from scratch.
 
 ## Datasheets
 Some manuals/datasheets that may be useful are included in `Datasheets/`. These include:
