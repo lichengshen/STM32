@@ -2,6 +2,8 @@
 
 A WAV audio player test application. The USB mass storage and file browser interface follows from the `USB-Filesystem` project, while adding audio playback through the on-board CS43L22 codec and headphone jack (CN4). Currently supporting only 16-bit WAV files.
 
+<img src="demo.png" width=500>
+
 ## Supported audio
 
 - RIFF/WAVE, little-endian PCM (`format = 1`), 16-bit mono or stereo.

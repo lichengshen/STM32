@@ -49,6 +49,12 @@ static bool browser_full_redraw;
 static UiMode ui_mode;
 static uint32_t next_mount_attempt;
 static uint32_t last_playback_ui;
+static uint32_t displayed_elapsed_seconds;
+static uint32_t displayed_total_seconds;
+static uint16_t displayed_progress;
+static uint8_t displayed_volume;
+static bool displayed_paused;
+static bool playback_dynamic_valid;
 
 static char root_path[APP_PATH_CAPACITY];
 static char current_path[APP_PATH_CAPACITY];
@@ -345,30 +351,56 @@ static void draw_playback_dynamic(bool force)
   last_playback_ui = now;
 
   const WavStreamInfo *stream = audio_player_stream();
+  const uint32_t elapsed_frames = audio_player_elapsed_frames();
+  const uint32_t elapsed_seconds = stream->sample_rate == 0u
+                                       ? 0u
+                                       : elapsed_frames / stream->sample_rate;
+  const uint32_t total_seconds = stream->sample_rate == 0u
+                                     ? 0u
+                                     : stream->total_frames / stream->sample_rate;
   char elapsed[12] = "";
   char total[12] = "";
-  append_time(elapsed, sizeof(elapsed), audio_player_elapsed_frames(), stream->sample_rate);
+  append_time(elapsed, sizeof(elapsed), elapsed_frames, stream->sample_rate);
   append_time(total, sizeof(total), stream->total_frames, stream->sample_rate);
-  char time_text[30] = "";
-  append_string(time_text, sizeof(time_text), elapsed);
-  append_string(time_text, sizeof(time_text), " / ");
-  append_string(time_text, sizeof(time_text), total);
-  tft_fill_rect(4u, 73u, 232u, 13u, TFT_BLACK);
-  tft_draw_text(4u, 74u, time_text, TFT_WHITE, 1u);
+  if (force || !playback_dynamic_valid || elapsed_seconds != displayed_elapsed_seconds ||
+      total_seconds != displayed_total_seconds) {
+    char time_text[30] = "";
+    append_string(time_text, sizeof(time_text), elapsed);
+    append_string(time_text, sizeof(time_text), " / ");
+    append_string(time_text, sizeof(time_text), total);
+    tft_fill_rect(4u, 73u, 232u, 13u, TFT_BLACK);
+    tft_draw_text(4u, 74u, time_text, TFT_WHITE, 1u);
+  }
 
   uint32_t progress = 0u;
   if (stream->total_frames != 0u)
-    progress = (audio_player_elapsed_frames() * 220u) / stream->total_frames;
+    progress = (elapsed_frames * 220u) / stream->total_frames;
   if (progress > 220u) progress = 220u;
-  tft_fill_rect(10u, 98u, 220u, 8u, TFT_GRAY);
-  if (progress != 0u) tft_fill_rect(10u, 98u, (uint16_t)progress, 8u, TFT_GREEN);
+  if (force || !playback_dynamic_valid || progress < displayed_progress) {
+    tft_fill_rect(10u, 98u, 220u, 8u, TFT_GRAY);
+    if (progress != 0u) tft_fill_rect(10u, 98u, (uint16_t)progress, 8u, TFT_GREEN);
+  } else if (progress > displayed_progress) {
+    tft_fill_rect((uint16_t)(10u + displayed_progress), 98u,
+                  (uint16_t)(progress - displayed_progress), 8u, TFT_GREEN);
+  }
 
-  char state_text[32] = "";
-  append_string(state_text, sizeof(state_text),
-                audio_player_is_paused() ? "PAUSED VOL " : "PLAYING VOL ");
-  append_u32(state_text, sizeof(state_text), audio_player_volume());
-  tft_fill_rect(4u, 268u, 232u, 13u, TFT_BLACK);
-  tft_draw_text(4u, 269u, state_text, audio_player_is_paused() ? TFT_YELLOW : TFT_CYAN, 1u);
+  const bool paused = audio_player_is_paused();
+  const uint8_t volume = audio_player_volume();
+  if (force || !playback_dynamic_valid || paused != displayed_paused ||
+      volume != displayed_volume) {
+    char state_text[32] = "";
+    append_string(state_text, sizeof(state_text), paused ? "PAUSED VOL " : "PLAYING VOL ");
+    append_u32(state_text, sizeof(state_text), volume);
+    tft_fill_rect(4u, 268u, 232u, 13u, TFT_BLACK);
+    tft_draw_text(4u, 269u, state_text, paused ? TFT_YELLOW : TFT_CYAN, 1u);
+  }
+
+  displayed_elapsed_seconds = elapsed_seconds;
+  displayed_total_seconds = total_seconds;
+  displayed_progress = (uint16_t)progress;
+  displayed_volume = volume;
+  displayed_paused = paused;
+  playback_dynamic_valid = true;
 }
 
 static void render_playback_static(void)
@@ -379,6 +411,7 @@ static void render_playback_static(void)
   tft_draw_text(4u, 51u, "PCM WAV / I2S DMA", TFT_GRAY, 1u);
   tft_draw_text(4u, 294u, "PRESS=PAUSE  HOLD=STOP", TFT_GRAY, 1u);
   last_playback_ui = 0u;
+  playback_dynamic_valid = false;
   draw_playback_dynamic(true);
 }
 
@@ -409,7 +442,6 @@ static void start_selected_wav(const char *path, const char *name)
     show_result("PLAYBACK ERROR", audio_player_error_text());
     return;
   }
-  draw_playback_dynamic(true);
 }
 
 static void activate_browser_item(void)
