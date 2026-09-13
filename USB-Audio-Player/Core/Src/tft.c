@@ -242,3 +242,44 @@ void tft_draw_text(uint16_t x, uint16_t y, const char *text, uint16_t color,
     x = (uint16_t)(x + 6u * scale);
   }
 }
+
+void tft_draw_text_opaque(uint16_t x, uint16_t y, uint16_t width, uint16_t height,
+                          const char *text, uint16_t color, uint16_t background,
+                          uint8_t scale)
+{
+  if (tft_spi == NULL || width == 0u || height == 0u || x >= TFT_WIDTH ||
+      y >= TFT_HEIGHT) return;
+  if ((uint32_t)x + width > TFT_WIDTH) width = (uint16_t)(TFT_WIDTH - x);
+  if ((uint32_t)y + height > TFT_HEIGHT) height = (uint16_t)(TFT_HEIGHT - y);
+  if (scale == 0u) scale = 1u;
+
+  if (!begin_memory_write(x, y, width, height)) return;
+  for (uint16_t row = 0u; row < height; ++row) {
+    for (uint16_t column = 0u; column < width; ++column) {
+      line_buffer[column * 2u] = (uint8_t)(background >> 8);
+      line_buffer[column * 2u + 1u] = (uint8_t)background;
+    }
+
+    if (text != NULL && row < 7u * scale) {
+      uint16_t text_x = 0u;
+      const uint8_t glyph_row = (uint8_t)(row / scale);
+      for (const char *character = text; *character != '\0'; ++character) {
+        if (*character == '\n' || text_x + 5u * scale > width) break;
+        const uint8_t *glyph = glyph_for(*character);
+        for (uint8_t glyph_column = 0u; glyph_column < 5u; ++glyph_column) {
+          if ((glyph[glyph_column] & (1u << glyph_row)) == 0u) continue;
+          const uint16_t first = (uint16_t)(text_x + glyph_column * scale);
+          for (uint8_t pixel = 0u; pixel < scale && first + pixel < width; ++pixel) {
+            line_buffer[(first + pixel) * 2u] = (uint8_t)(color >> 8);
+            line_buffer[(first + pixel) * 2u + 1u] = (uint8_t)color;
+          }
+        }
+        text_x = (uint16_t)(text_x + 6u * scale);
+        if (text_x >= width) break;
+      }
+    }
+
+    if (!spi_send(line_buffer, (uint16_t)(width * 2u))) break;
+  }
+  HAL_GPIO_WritePin(TFT_CS_GPIO_Port, TFT_CS_Pin, GPIO_PIN_SET);
+}

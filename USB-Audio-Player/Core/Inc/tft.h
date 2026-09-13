@@ -24,5 +24,9 @@ void tft_fill_rect(uint16_t x, uint16_t y, uint16_t width, uint16_t height,
 void tft_clear(uint16_t color);
 void tft_draw_text(uint16_t x, uint16_t y, const char *text, uint16_t color,
                    uint8_t scale);
+/* Draw one text line and its background as a single ILI9341 memory write. */
+void tft_draw_text_opaque(uint16_t x, uint16_t y, uint16_t width, uint16_t height,
+                          const char *text, uint16_t color, uint16_t background,
+                          uint8_t scale);
 
 #endif

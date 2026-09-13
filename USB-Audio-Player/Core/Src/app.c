@@ -368,8 +368,7 @@ static void draw_playback_dynamic(bool force)
     append_string(time_text, sizeof(time_text), elapsed);
     append_string(time_text, sizeof(time_text), " / ");
     append_string(time_text, sizeof(time_text), total);
-    tft_fill_rect(4u, 73u, 232u, 13u, TFT_BLACK);
-    tft_draw_text(4u, 74u, time_text, TFT_WHITE, 1u);
+    tft_draw_text_opaque(4u, 74u, 232u, 7u, time_text, TFT_WHITE, TFT_BLACK, 1u);
   }
 
   uint32_t progress = 0u;
@@ -391,8 +390,8 @@ static void draw_playback_dynamic(bool force)
     char state_text[32] = "";
     append_string(state_text, sizeof(state_text), paused ? "PAUSED VOL " : "PLAYING VOL ");
     append_u32(state_text, sizeof(state_text), volume);
-    tft_fill_rect(4u, 268u, 232u, 13u, TFT_BLACK);
-    tft_draw_text(4u, 269u, state_text, paused ? TFT_YELLOW : TFT_CYAN, 1u);
+    tft_draw_text_opaque(4u, 269u, 232u, 7u, state_text,
+                          paused ? TFT_YELLOW : TFT_CYAN, TFT_BLACK, 1u);
   }
 
   displayed_elapsed_seconds = elapsed_seconds;
