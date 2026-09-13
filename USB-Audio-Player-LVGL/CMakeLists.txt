@@ -31,6 +31,24 @@ message("Build type: " ${CMAKE_BUILD_TYPE})
 # Enable CMake support for ASM and C languages
 enable_language(C ASM)
 
+# LVGL is kept as a pinned submodule.  Its configuration belongs to the
+# firmware, not the library checkout, so CubeMX regeneration cannot disturb it.
+set(LV_BUILD_CONF_PATH "${CMAKE_CURRENT_SOURCE_DIR}/Core/Inc/lv_conf.h" CACHE PATH
+    "LVGL configuration file" FORCE)
+# A prior local configure may have selected the directory-based LVGL option.
+# v9 accepts one configuration mechanism only; use the explicit pinned file.
+set(LV_BUILD_CONF_DIR "" CACHE PATH "LVGL configuration directory" FORCE)
+set(CONFIG_LV_BUILD_EXAMPLES OFF CACHE BOOL "Build LVGL examples" FORCE)
+set(CONFIG_LV_BUILD_DEMOS OFF CACHE BOOL "Build LVGL demos" FORCE)
+set(CONFIG_LV_USE_THORVG_INTERNAL OFF CACHE BOOL "Build LVGL's unused ThorVG renderer" FORCE)
+add_subdirectory(Middlewares/Third_Party/lvgl)
+# LVGL v9.3's generic CMake glob includes optional architecture-specific
+# assembly sources.  Cortex-M4 has neither Helium nor Neon; remove those
+# sources rather than attempting to feed their C preprocessor headers to gas.
+get_target_property(LVGL_SOURCES lvgl SOURCES)
+list(FILTER LVGL_SOURCES EXCLUDE REGEX "\\.S$")
+set_property(TARGET lvgl PROPERTY SOURCES "${LVGL_SOURCES}")
+
 # Create an executable object type
 add_executable(${CMAKE_PROJECT_NAME})
 
@@ -48,7 +66,8 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/audio_player.c
     Core/Src/codec_cs43l22.c
     Core/Src/encoder.c
-    Core/Src/tft.c
+    Core/Src/lvgl_port.c
+    Core/Src/ui.c
     Core/Src/wav.c
 )
 
@@ -68,6 +87,7 @@ list(REMOVE_ITEM CMAKE_C_IMPLICIT_LINK_LIBRARIES ob)
 # Add linked libraries
 target_link_libraries(${CMAKE_PROJECT_NAME}
     stm32cubemx
+    lvgl
 
     # Add user defined libraries
 )

@@ -1,0 +1,29 @@
+/* LVGL configuration for the STM32F407G-DISC1 USB audio player. */
+#ifndef LV_CONF_H
+#define LV_CONF_H
+
+#include <stdint.h>
+
+#define LV_USE_STDLIB_MALLOC LV_STDLIB_BUILTIN
+#define LV_USE_STDLIB_STRING LV_STDLIB_BUILTIN
+#define LV_USE_STDLIB_SPRINTF LV_STDLIB_BUILTIN
+#define LV_MEM_SIZE (32U * 1024U)
+#define LV_MEM_POOL_EXPAND_SIZE 0
+
+#define LV_USE_OS LV_OS_NONE
+#define LV_DEF_REFR_PERIOD 20
+#define LV_DRAW_BUF_ALIGN 4
+#define LV_DRAW_LAYER_SIMPLE_BUF_SIZE (4U * 1024U)
+#define LV_DRAW_LAYER_MAX_MEMORY (4U * 1024U)
+
+#define LV_USE_LOG 0
+#define LV_USE_ASSERT_NULL 1
+#define LV_USE_ASSERT_MALLOC 1
+
+#define LV_FONT_MONTSERRAT_14 1
+#define LV_FONT_MONTSERRAT_20 1
+#define LV_FONT_DEFAULT &lv_font_montserrat_14
+
+#define LV_USE_ILI9341 1
+
+#endif

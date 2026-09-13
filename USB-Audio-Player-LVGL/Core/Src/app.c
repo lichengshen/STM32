@@ -3,27 +3,29 @@
 #include "audio_player.h"
 #include "encoder.h"
 #include "fatfs.h"
+#include "lvgl_port.h"
 #include "main.h"
-#include "tft.h"
+#include "ui.h"
 #include "usb_host.h"
 
+#include <limits.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
 
 #define APP_PATH_CAPACITY     256u
 #define APP_MAX_ENTRIES       64u
-#define APP_VISIBLE_ROWS      21u
 #define APP_MOUNT_RETRY_MS    1000u
+#define APP_PLAYBACK_UI_MS    50u
 #define FATFS_ATTR_VOLUME_ID  0x08u
 
 typedef enum {
-  UI_WAITING,
-  UI_BROWSER,
-  UI_PLAYING,
-  UI_RESULT,
-  UI_MOUNT_ERROR,
-} UiMode;
+  APP_UI_WAITING,
+  APP_UI_BROWSER,
+  APP_UI_PLAYING,
+  APP_UI_RESULT,
+  APP_UI_MOUNT_ERROR,
+} AppUiMode;
 
 typedef struct {
   char name[_MAX_LFN + 1u];
@@ -32,23 +34,18 @@ typedef struct {
 } BrowserEntry;
 
 extern ApplicationTypeDef Appli_state;
-extern SPI_HandleTypeDef hspi1;
 extern TIM_HandleTypeDef htim1;
 
 static BrowserEntry entries[APP_MAX_ENTRIES];
+static UiBrowserItem ui_entries[APP_MAX_ENTRIES];
 static uint16_t entry_count;
-static uint16_t selected;
-static uint16_t scroll_row;
-static uint16_t displayed_selected;
-static uint16_t displayed_scroll;
 static bool directory_truncated;
 static bool filesystem_mounted;
-static bool redraw_needed;
-static bool tft_ready;
-static bool browser_full_redraw;
-static UiMode ui_mode;
+static bool lvgl_ready;
+static AppUiMode ui_mode;
 static uint32_t next_mount_attempt;
 static uint32_t last_playback_ui;
+static int32_t pending_volume_steps;
 
 static char root_path[APP_PATH_CAPACITY];
 static char current_path[APP_PATH_CAPACITY];
@@ -174,22 +171,37 @@ static uint16_t browser_fixed_items(void)
   return (uint16_t)(1u + (path_is_root() ? 0u : 1u));
 }
 
-static uint16_t browser_item_count(void)
+static void show_waiting(void)
 {
-  return (uint16_t)(browser_fixed_items() + entry_count);
+  lvgl_port_set_encoder_turn_cb(NULL);
+  ui_mode = APP_UI_WAITING;
+  ui_show_waiting();
 }
 
 static void show_result(const char *title, const char *detail)
 {
   copy_string(result_title, sizeof(result_title), title);
   copy_string(result_detail, sizeof(result_detail), detail);
-  ui_mode = UI_RESULT;
-  redraw_needed = true;
+  lvgl_port_set_encoder_turn_cb(NULL);
+  ui_mode = APP_UI_RESULT;
+  ui_show_result(result_title, result_detail);
 }
 
 static void show_fresult(const char *title, FRESULT result)
 {
   show_result(title, fresult_text(result));
+}
+
+static void show_browser(void)
+{
+  for (uint16_t index = 0u; index < entry_count; ++index) {
+    ui_entries[index].name = entries[index].name;
+    ui_entries[index].directory = (entries[index].attributes & AM_DIR) != 0u;
+    ui_entries[index].playable = is_wav_file(entries[index].name);
+  }
+  lvgl_port_set_encoder_turn_cb(NULL);
+  ui_mode = APP_UI_BROWSER;
+  ui_show_browser(current_path, ui_entries, entry_count, !path_is_root(), directory_truncated);
 }
 
 static bool load_directory(void)
@@ -236,97 +248,8 @@ static bool load_directory(void)
     entries[at] = item;
   }
 
-  selected = 0u;
-  scroll_row = 0u;
-  browser_full_redraw = true;
-  ui_mode = UI_BROWSER;
-  redraw_needed = true;
+  show_browser();
   return true;
-}
-
-static void render_waiting(void)
-{
-  tft_clear(TFT_BLACK);
-  tft_draw_text(10u, 14u, "USB AUDIO PLAYER", TFT_CYAN, 2u);
-  tft_draw_text(10u, 58u, "WAITING FOR USB DRIVE", TFT_YELLOW, 1u);
-  tft_draw_text(10u, 78u, "CN5 HOST / MSC / FAT32", TFT_WHITE, 1u);
-  tft_draw_text(10u, 104u, "INSERT A WAV DRIVE", TFT_GRAY, 1u);
-}
-
-static void render_mount_error(void)
-{
-  tft_clear(TFT_BLACK);
-  tft_draw_text(10u, 14u, "USB MOUNT ERROR", TFT_RED, 2u);
-  tft_draw_text(10u, 58u, result_detail, TFT_YELLOW, 2u);
-  tft_draw_text(10u, 96u, "CHECK FAT32 DRIVE", TFT_WHITE, 1u);
-  tft_draw_text(10u, 114u, "RETRYING...", TFT_GRAY, 1u);
-}
-
-static void item_label(uint16_t item, char *buffer, uint16_t capacity)
-{
-  buffer[0] = '\0';
-  if (item == 0u) {
-    copy_string(buffer, capacity, "[REFRESH DIRECTORY]");
-    return;
-  }
-  if (!path_is_root() && item == 1u) {
-    copy_string(buffer, capacity, "[..] PARENT DIRECTORY");
-    return;
-  }
-  const uint16_t index = (uint16_t)(item - browser_fixed_items());
-  if (index >= entry_count) return;
-  if ((entries[index].attributes & AM_DIR) != 0u) copy_string(buffer, capacity, "[D] ");
-  else if (is_wav_file(entries[index].name)) copy_string(buffer, capacity, "[W] ");
-  else copy_string(buffer, capacity, "[F] ");
-  append_string(buffer, capacity, entries[index].name);
-}
-
-static void draw_browser_row(uint16_t item, uint16_t row, bool highlighted)
-{
-  const uint16_t y = (uint16_t)(43u + row * 12u);
-  tft_fill_rect(0u, (uint16_t)(y - 1u), TFT_WIDTH, 11u,
-                highlighted ? TFT_BLUE : TFT_BLACK);
-  char label[40];
-  item_label(item, label, sizeof(label));
-  tft_draw_text(3u, y, label, highlighted ? TFT_WHITE : TFT_GRAY, 1u);
-}
-
-static void render_browser(void)
-{
-  const uint16_t count = browser_item_count();
-  const bool full_redraw = browser_full_redraw || displayed_scroll != scroll_row;
-  if (full_redraw) {
-    tft_clear(TFT_BLACK);
-    tft_draw_text(4u, 4u, "USB WAV BROWSER", TFT_CYAN, 2u);
-    tft_draw_text(4u, 24u, current_path, TFT_WHITE, 1u);
-    for (uint16_t row = 0u; row < APP_VISIBLE_ROWS; ++row) {
-      const uint16_t item = (uint16_t)(scroll_row + row);
-      if (item >= count) break;
-      draw_browser_row(item, row, item == selected);
-    }
-    if (directory_truncated) tft_draw_text(4u, 300u, "FIRST 64 ENTRIES", TFT_YELLOW, 1u);
-    else {
-      char footer[30] = "ENTRIES ";
-      append_u32(footer, sizeof(footer), entry_count);
-      tft_draw_text(4u, 300u, footer, TFT_GRAY, 1u);
-    }
-    tft_draw_text(4u, 311u, "TURN=SELECT  PRESS=OPEN", TFT_GRAY, 1u);
-    browser_full_redraw = false;
-  } else if (displayed_selected != selected) {
-    draw_browser_row(displayed_selected,
-                     (uint16_t)(displayed_selected - scroll_row), false);
-    draw_browser_row(selected, (uint16_t)(selected - scroll_row), true);
-  }
-  displayed_selected = selected;
-  displayed_scroll = scroll_row;
-}
-
-static void render_result(void)
-{
-  tft_clear(TFT_BLACK);
-  tft_draw_text(8u, 14u, result_title, TFT_GREEN, 2u);
-  tft_draw_text(8u, 58u, result_detail, TFT_WHITE, 2u);
-  tft_draw_text(8u, 104u, "PRESS TO RETURN", TFT_GRAY, 1u);
 }
 
 static void append_time(char *buffer, uint16_t capacity, uint32_t frames, uint32_t rate)
@@ -338,60 +261,40 @@ static void append_time(char *buffer, uint16_t capacity, uint32_t frames, uint32
   append_u32(buffer, capacity, seconds % 60u);
 }
 
-static void draw_playback_dynamic(bool force)
+static void update_playback_ui(bool force)
 {
   const uint32_t now = HAL_GetTick();
-  if (!force && (uint32_t)(now - last_playback_ui) < 50u) return;
+  if (!force && (uint32_t)(now - last_playback_ui) < APP_PLAYBACK_UI_MS) return;
   last_playback_ui = now;
 
   const WavStreamInfo *stream = audio_player_stream();
   char elapsed[12] = "";
   char total[12] = "";
+  char time_text[30] = "";
   append_time(elapsed, sizeof(elapsed), audio_player_elapsed_frames(), stream->sample_rate);
   append_time(total, sizeof(total), stream->total_frames, stream->sample_rate);
-  char time_text[30] = "";
   append_string(time_text, sizeof(time_text), elapsed);
   append_string(time_text, sizeof(time_text), " / ");
   append_string(time_text, sizeof(time_text), total);
-  tft_fill_rect(4u, 73u, 232u, 13u, TFT_BLACK);
-  tft_draw_text(4u, 74u, time_text, TFT_WHITE, 1u);
 
   uint32_t progress = 0u;
-  if (stream->total_frames != 0u)
-    progress = (audio_player_elapsed_frames() * 220u) / stream->total_frames;
-  if (progress > 220u) progress = 220u;
-  tft_fill_rect(10u, 98u, 220u, 8u, TFT_GRAY);
-  if (progress != 0u) tft_fill_rect(10u, 98u, (uint16_t)progress, 8u, TFT_GREEN);
-
-  char state_text[32] = "";
-  append_string(state_text, sizeof(state_text),
-                audio_player_is_paused() ? "PAUSED VOL " : "PLAYING VOL ");
-  append_u32(state_text, sizeof(state_text), audio_player_volume());
-  tft_fill_rect(4u, 268u, 232u, 13u, TFT_BLACK);
-  tft_draw_text(4u, 269u, state_text, audio_player_is_paused() ? TFT_YELLOW : TFT_CYAN, 1u);
+  if (stream->total_frames != 0u) {
+    progress = (uint32_t)(((uint64_t)audio_player_elapsed_frames() * 100u) /
+                          stream->total_frames);
+  }
+  if (progress > 100u) progress = 100u;
+  ui_update_playback(time_text, (uint8_t)progress, audio_player_is_paused(),
+                     audio_player_volume());
 }
 
-static void render_playback_static(void)
+static void collect_playback_volume_steps(int32_t steps)
 {
-  tft_clear(TFT_BLACK);
-  tft_draw_text(4u, 4u, "NOW PLAYING", TFT_CYAN, 2u);
-  tft_draw_text(4u, 29u, playing_name, TFT_WHITE, 1u);
-  tft_draw_text(4u, 51u, "PCM WAV / I2S DMA", TFT_GRAY, 1u);
-  tft_draw_text(4u, 294u, "PRESS=PAUSE  HOLD=STOP", TFT_GRAY, 1u);
-  last_playback_ui = 0u;
-  draw_playback_dynamic(true);
-}
-
-static void render(void)
-{
-  if (!tft_ready || !redraw_needed) return;
-  redraw_needed = false;
-  switch (ui_mode) {
-  case UI_WAITING: render_waiting(); break;
-  case UI_BROWSER: render_browser(); break;
-  case UI_RESULT: render_result(); break;
-  case UI_MOUNT_ERROR: render_mount_error(); break;
-  default: break;
+  if (steps > 0 && pending_volume_steps > INT32_MAX - steps) {
+    pending_volume_steps = INT32_MAX;
+  } else if (steps < 0 && pending_volume_steps < INT32_MIN - steps) {
+    pending_volume_steps = INT32_MIN;
+  } else {
+    pending_volume_steps += steps;
   }
 }
 
@@ -402,17 +305,19 @@ static void start_selected_wav(const char *path, const char *name)
     return;
   }
   copy_string(playing_name, sizeof(playing_name), name);
-  ui_mode = UI_PLAYING;
-  redraw_needed = false;
-  if (tft_ready) render_playback_static();
+  ui_mode = APP_UI_PLAYING;
+  ui_show_playback(playing_name);
+  lvgl_port_set_encoder_turn_cb(collect_playback_volume_steps);
+  pending_volume_steps = 0;
+  last_playback_ui = 0u;
   if (!audio_player_start()) {
     show_result("PLAYBACK ERROR", audio_player_error_text());
     return;
   }
-  draw_playback_dynamic(true);
+  update_playback_ui(true);
 }
 
-static void activate_browser_item(void)
+static void activate_browser_item(uint16_t selected)
 {
   if (selected == 0u) {
     (void)load_directory();
@@ -448,61 +353,49 @@ static void activate_browser_item(void)
   start_selected_wav(path, entries[index].name);
 }
 
-static void move_browser_selection(int32_t steps)
+static void stop_playback_to_browser(void)
 {
-  const uint16_t count = browser_item_count();
-  if (count == 0u || steps == 0) return;
-  int32_t next = (int32_t)selected + steps;
-  if (next < 0) next = 0;
-  if (next >= count) next = (int32_t)count - 1;
-  selected = (uint16_t)next;
-  if (selected < scroll_row) scroll_row = selected;
-  if (selected >= scroll_row + APP_VISIBLE_ROWS)
-    scroll_row = (uint16_t)(selected - APP_VISIBLE_ROWS + 1u);
-  redraw_needed = true;
+  lvgl_port_set_encoder_turn_cb(NULL);
+  pending_volume_steps = 0;
+  audio_player_stop();
+  (void)load_directory();
 }
 
-static void service_playback(int32_t steps, EncoderButtonEvent button)
+static void service_playback(void)
 {
   audio_player_service();
-  AudioPlayerEvent event = audio_player_take_event();
+  const AudioPlayerEvent event = audio_player_take_event();
   if (event == AUDIO_PLAYER_EVENT_ERROR) {
     show_result("PLAYBACK ERROR", audio_player_error_text());
     return;
   }
   if (event == AUDIO_PLAYER_EVENT_FINISHED) {
-    ui_mode = UI_BROWSER;
-    browser_full_redraw = true;
-    redraw_needed = true;
+    lvgl_port_set_encoder_turn_cb(NULL);
+    pending_volume_steps = 0;
+    (void)load_directory();
     return;
   }
 
-  if (steps != 0 && !audio_player_change_volume(steps)) {
-    show_result("PLAYBACK ERROR", audio_player_error_text());
-    return;
+  if (pending_volume_steps != 0) {
+    const int32_t steps = pending_volume_steps;
+    pending_volume_steps = 0;
+    if (!audio_player_change_volume(steps)) {
+      show_result("PLAYBACK ERROR", audio_player_error_text());
+      return;
+    }
+    update_playback_ui(true);
   }
-  if (button == ENCODER_BUTTON_LONG) {
-    audio_player_stop();
-    ui_mode = UI_BROWSER;
-    browser_full_redraw = true;
-    redraw_needed = true;
-    return;
-  }
-  if (button == ENCODER_BUTTON_SHORT && !audio_player_toggle_pause()) {
-    show_result("PLAYBACK ERROR", audio_player_error_text());
-    return;
-  }
-  draw_playback_dynamic(false);
+  update_playback_ui(false);
 }
 
 static void disconnect_filesystem(void)
 {
+  lvgl_port_set_encoder_turn_cb(NULL);
+  pending_volume_steps = 0;
   audio_player_stop();
   if (filesystem_mounted) (void)f_mount(NULL, USBHPath, 0u);
   filesystem_mounted = false;
-  browser_full_redraw = true;
-  ui_mode = UI_WAITING;
-  redraw_needed = true;
+  show_waiting();
 }
 
 static void try_mount(void)
@@ -520,8 +413,27 @@ static void try_mount(void)
     return;
   }
   copy_string(result_detail, sizeof(result_detail), fresult_text(result));
-  ui_mode = UI_MOUNT_ERROR;
-  redraw_needed = true;
+  lvgl_port_set_encoder_turn_cb(NULL);
+  ui_mode = APP_UI_MOUNT_ERROR;
+  ui_show_mount_error(result_detail);
+}
+
+static void handle_ui_action(void)
+{
+  uint16_t selected = 0u;
+  const UiAction action = ui_take_action(&selected);
+  if (action == UI_ACTION_NONE) return;
+
+  if (ui_mode == APP_UI_BROWSER && action == UI_ACTION_BROWSER_ITEM) {
+    activate_browser_item(selected);
+  } else if (ui_mode == APP_UI_RESULT && action == UI_ACTION_RESULT_RETURN) {
+    (void)load_directory();
+  } else if (ui_mode == APP_UI_PLAYING && action == UI_ACTION_PLAYBACK_TOGGLE) {
+    if (!audio_player_toggle_pause()) show_result("PLAYBACK ERROR", audio_player_error_text());
+    else update_playback_ui(true);
+  } else if (ui_mode == APP_UI_PLAYING && action == UI_ACTION_PLAYBACK_STOP) {
+    stop_playback_to_browser();
+  }
 }
 
 void app_init(void)
@@ -530,34 +442,25 @@ void app_init(void)
   DBGMCU->CR &= ~DBGMCU_CR_TRACE_IOEN;
   encoder_init(&htim1);
   audio_player_init();
-  tft_ready = tft_init(&hspi1);
-  ui_mode = UI_WAITING;
-  redraw_needed = true;
+  lv_init();
+  lvgl_ready = lvgl_port_init();
+  ui_init();
+  show_waiting();
   next_mount_attempt = HAL_GetTick();
 }
 
 void app_poll(void)
 {
-  const int32_t steps = encoder_take_steps();
-  const EncoderButtonEvent button = encoder_take_button_event();
+  encoder_poll();
 
   if (Appli_state != APPLICATION_READY) {
-    if (filesystem_mounted || ui_mode != UI_WAITING) disconnect_filesystem();
-    render();
-    return;
-  }
-  if (!filesystem_mounted) {
+    if (filesystem_mounted || ui_mode != APP_UI_WAITING) disconnect_filesystem();
+  } else if (!filesystem_mounted) {
     try_mount();
-    render();
-    return;
+  } else {
+    handle_ui_action();
+    if (ui_mode == APP_UI_PLAYING) service_playback();
   }
 
-  if (ui_mode == UI_PLAYING) service_playback(steps, button);
-  else if (ui_mode == UI_BROWSER) {
-    move_browser_selection(steps);
-    if (button == ENCODER_BUTTON_SHORT) activate_browser_item();
-  } else if (ui_mode == UI_RESULT && button == ENCODER_BUTTON_SHORT) {
-    (void)load_directory();
-  }
-  render();
+  if (lvgl_ready) (void)lv_timer_handler();
 }

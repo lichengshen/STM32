@@ -26,6 +26,9 @@
 #include "stm32f4xx_hal.h"
 #include "usbh_core.h"
 #include "usbh_msc.h"
+/* Handle for USB Host */
+#define hUSB_Host hUsbHostFS
+
 /*-----------------------------------------------------------------------------/
 / Function Configurations
 /-----------------------------------------------------------------------------*/

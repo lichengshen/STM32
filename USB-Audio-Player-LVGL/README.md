@@ -1,4 +1,6 @@
-# USB WAV Audio Player
+# USB WAV Audio Player (LVGL)
+
+This is a migration of the `USB-Audio-Player` project to use LVGL v9.3.0. We migrated the UI from the custom TFT renderer to LVGL v9.3.0, and we use LVGL's ILI9341 driver. The rotary encoder is also adapted to LVGL as an input device. The behavior of the application is currently unchanged.
 
 A WAV audio player test application. The USB mass storage and file browser interface follows from the `USB-Filesystem` project, while adding audio playback through the on-board CS43L22 codec and headphone jack (CN4). Currently supporting only 16-bit WAV files.
 
@@ -23,7 +25,13 @@ volume/state without full-screen redraws while the DMA stream is active.
 
 ## Architecture
 
-USB/FatFs file reads and TFT rendering run cooperatively in `app_poll()`.
+USB/FatFs file reads and LVGL run cooperatively in `app_poll()`. LVGL v9.3.0
+uses its ILI9341 driver with a small STM32 HAL transport: commands are sent
+blocking in 8-bit SPI mode and RGB565 pixels are sent in 16-bit SPI TX DMA
+mode. Two 240 x 10-line RGB565 draw buffers, the 32 KiB LVGL allocation, and
+the audio DMA buffer all reside in ordinary SRAM, which is accessible by DMA.
+`lv_display_flush_ready()` is called only by the SPI completion/error callback.
+
 I2S3 TX uses circular DMA on DMA1 Stream 7, with a 32 KiB ordinary-SRAM buffer
 split into two 16 KiB halves. DMA callbacks only record which half became free;
 the foreground player refills that half from FatFs. This is the same two-buffer
@@ -56,6 +64,9 @@ We start from the configuration in `USB-Filesystem.ioc`, which already includes 
 - I2S3 master transmit on PA4/PC7/PC10/PC12, Philips 16-bit, MCLK enabled.
 - DMA1 Stream 7 / Channel 0 for I2S3 TX: circular, half-word transfers, high priority, with half/full-complete interrupts.
 - DMA1 NVIC interrupt preemption priority set to 6, giving it lower priority than USB interrupts.
+- SPI1 TX on DMA2 Stream 3 / Channel 3: normal, half-word memory/peripheral
+  transfers, low priority, with its interrupt priority set below USB and the
+  audio DMA interrupt. SPI1 uses the `/4` prescaler (21 MHz).
 - Clock tree set to `PLLI2SN = 258` and `PLLI2SR = 3` for the 48 kHz configuration. However, the values of `PLLI2SN` and `PLLI2SR` are reapplied at every `audio_player_start()` to match the WAV file's sample rate.
 
 The USB VBUS active-low fix and the FatFs `hUSB_Host` alias are kept inside
@@ -65,9 +76,11 @@ CubeMX user-code sections.
 
 | File | Role |
 | --- | --- |
-| `Core/Src/app.c` | USB/mount state machine, directory browser, controls, and TFT UI. |
+| `Core/Src/app.c` | USB/mount and playback coordinator between the existing audio path and LVGL UI. |
+| `Core/Src/lvgl_port.c` | ILI9341 SPI/DMA transport, LVGL tick source, and encoder input device. |
+| `Core/Src/ui.c` | LVGL waiting, mount-error, browser, result, and playback screens. |
 | `Core/Src/wav.c` | RIFF/WAVE validation and stream metadata parser. |
 | `Core/Src/audio_player.c` | Mono-to-stereo PCM preparation, circular-DMA streaming, track state, and DMA callbacks. |
 | `Core/Src/codec_cs43l22.c` | CS43L22 reset, I2C setup, mute/pause/resume, and volume control. |
-| `Core/Src/encoder.c` | Encoder steps plus debounced short and long button events. |
+| `Core/Src/encoder.c` | TIM1 encoder steps plus debounced pressed state. |
 | `tests/test_wav.c` | Host-side WAV parser tests. |

@@ -6,14 +6,9 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-typedef enum {
-  ENCODER_BUTTON_NONE = 0,
-  ENCODER_BUTTON_SHORT,
-  ENCODER_BUTTON_LONG,
-} EncoderButtonEvent;
-
 void encoder_init(TIM_HandleTypeDef *timer);
+void encoder_poll(void);
 int32_t encoder_take_steps(void);
-EncoderButtonEvent encoder_take_button_event(void);
+bool encoder_is_pressed(void);
 
 #endif
