@@ -1,0 +1,19 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "STM32: Debug with ST-LINK",
+            "type": "stlinkgdbtarget",
+            "request": "launch",
+            "cwd": "${workspaceFolder}",
+            "preBuild": "${command:st-stm32-ide-debug-launch.build}",
+            "runEntry": "main",
+            "imagesAndSymbols": [
+                {
+                    "imageFileName": "${workspaceFolder}/build/Debug/USB-Audio-Recorder-Player-LVGL-FreeRTOS.elf",
+                    "symbolFileName": "${workspaceFolder}/build/Debug/USB-Audio-Recorder-Player-LVGL-FreeRTOS.elf"
+                }
+            ]
+        }
+    ]
+}
