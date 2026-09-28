@@ -23,6 +23,12 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include <stddef.h>
+#include "app_events.h"
+#include "app_memory.h"
+#include "FreeRTOS.h"
+#include "portable.h"
+#include "usbh_core.h"
 
 /* USER CODE END Includes */
 
@@ -69,7 +75,17 @@ const osThreadAttr_t UiTask_attributes = {
   .stack_size = 1024 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
+/* Definitions for UiEventQueue */
+osMessageQueueId_t UiEventQueueHandle;
+const osMessageQueueAttr_t UiEventQueue_attributes = {
+  .name = "UiEventQueue"
+};
 /* USER CODE BEGIN PV */
+extern USBH_HandleTypeDef hUsbHostFS;
+extern uint8_t _end;
+extern void *_sbrk(ptrdiff_t incr);
+volatile AppFault app_fault_code = APP_FAULT_NONE;
+volatile AppMemoryStats app_memory_stats;
 
 /* USER CODE END PV */
 
@@ -89,6 +105,35 @@ void StartUiTask(void *argument);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+static void AppFail(AppFault fault)
+{
+  app_fault_code = fault;
+  Error_Handler();
+}
+
+static void AppUpdateMemoryStats(void)
+{
+  osThreadId_t usb_task = hUsbHostFS.thread;
+  uint32_t c_heap_bytes = (uint32_t)((uintptr_t)_sbrk(0) - (uintptr_t)&_end);
+
+  app_memory_stats.free_heap_bytes = (uint32_t)xPortGetFreeHeapSize();
+  app_memory_stats.min_free_heap_bytes = (uint32_t)xPortGetMinimumEverFreeHeapSize();
+  app_memory_stats.c_heap_current_bytes = c_heap_bytes;
+  if (c_heap_bytes > app_memory_stats.c_heap_peak_bytes)
+  {
+    app_memory_stats.c_heap_peak_bytes = c_heap_bytes;
+  }
+  app_memory_stats.storage_stack_min_free_bytes = osThreadGetStackSpace(StorageTaskHandle);
+  app_memory_stats.audio_stack_min_free_bytes = osThreadGetStackSpace(AudioTaskHandle);
+  app_memory_stats.ui_stack_min_free_bytes = osThreadGetStackSpace(UiTaskHandle);
+  app_memory_stats.usb_task_present = (usb_task != NULL);
+  app_memory_stats.usb_stack_min_free_bytes =
+      (usb_task != NULL) ? osThreadGetStackSpace(usb_task) : 0U;
+  app_memory_stats.queue_capacity = osMessageQueueGetCapacity(UiEventQueueHandle);
+  app_memory_stats.queue_item_bytes = osMessageQueueGetMsgSize(UiEventQueueHandle);
+  app_memory_stats.queue_pending = osMessageQueueGetCount(UiEventQueueHandle);
+  app_memory_stats.sample_count++;
+}
 
 /* USER CODE END 0 */
 
@@ -143,8 +188,15 @@ int main(void)
   /* start timers, add new ones, ... */
   /* USER CODE END RTOS_TIMERS */
 
+  /* Create the queue(s) */
+  /* creation of UiEventQueue */
+  UiEventQueueHandle = osMessageQueueNew (8, sizeof(AppEvent), &UiEventQueue_attributes);
+
   /* USER CODE BEGIN RTOS_QUEUES */
-  /* add queues, ... */
+  if (UiEventQueueHandle == NULL)
+  {
+    AppFail(APP_FAULT_QUEUE_CREATE);
+  }
   /* USER CODE END RTOS_QUEUES */
 
   /* Create the thread(s) */
@@ -446,6 +498,12 @@ void StartStorageTask(void *argument)
   /* init code for USB_HOST */
   MX_USB_HOST_Init();
   /* USER CODE BEGIN 5 */
+  const AppEvent started = {APP_EVENT_TASK_STARTED, APP_SOURCE_STORAGE, 0};
+  if (osMessageQueuePut(UiEventQueueHandle, &started, 0, 0) != osOK)
+  {
+    AppFail(APP_FAULT_QUEUE_SEND);
+  }
+
   /* Green LED: storage task is running. */
   for(;;)
   {
@@ -465,6 +523,12 @@ void StartStorageTask(void *argument)
 void StartAudioTask(void *argument)
 {
   /* USER CODE BEGIN StartAudioTask */
+  const AppEvent started = {APP_EVENT_TASK_STARTED, APP_SOURCE_AUDIO, 0};
+  if (osMessageQueuePut(UiEventQueueHandle, &started, 0, 0) != osOK)
+  {
+    AppFail(APP_FAULT_QUEUE_SEND);
+  }
+
   /* Red LED: audio task is running. */
   for(;;)
   {
@@ -484,11 +548,29 @@ void StartAudioTask(void *argument)
 void StartUiTask(void *argument)
 {
   /* USER CODE BEGIN StartUiTask */
+  uint32_t started_sources = 0;
+  AppEvent event;
+
   /* Orange LED: UI task is running. */
   for(;;)
   {
+    osStatus_t status = osMessageQueueGet(UiEventQueueHandle, &event, NULL, 0);
+    if (status == osOK && event.kind == APP_EVENT_TASK_STARTED)
+    {
+      started_sources |= event.source;
+      if (started_sources == (APP_SOURCE_AUDIO | APP_SOURCE_STORAGE))
+      {
+        HAL_GPIO_WritePin(GPIOD, LD6_Pin, GPIO_PIN_SET);
+      }
+    }
+    else if (status != osOK && status != osErrorResource)
+    {
+      AppFail(APP_FAULT_QUEUE_RECEIVE);
+    }
+
     HAL_GPIO_TogglePin(GPIOD, LD3_Pin);
     osDelay(500);
+    AppUpdateMemoryStats();
   }
   /* USER CODE END StartUiTask */
 }

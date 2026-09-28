@@ -12,8 +12,9 @@ Use your proposed `UiTask`, `AudioTask`, and `StorageTask`. Each task owns one s
 
 | # | Change | CubeMX before this checkpoint | Focused check |
 | --- | --- | --- | --- |
-| 1 | Generate the scaffold and start the three application tasks with a heartbeat. | Board selector, CMake, start with CubeMX's HSE crystal/ceramic setting, 168 MHz/USB 48 MHz clocks, SWD, TIM6 HAL timebase, FreeRTOS CMSIS v2. The current scaffold also enables USB Host MSC, which creates a fourth, library-owned task. Its CubeMX stack setting is in bytes; 512 bytes passed the heartbeat test, but not a USB workload test. Confirm the selected HSE path on the actual board; bypass is for the ST-LINK MCO path. | Three application LEDs blink; HAL and RTOS ticks advance. |
-| 2 | Define task messages, bounded queues, error reporting, and a RAM budget that includes the USB helper task. | None. | Inject a test message; inspect queue and stack use. |
+| 1 | Generate the scaffold and start the three application tasks with a heartbeat. | Board selector, CMake, start with CubeMX's HSE crystal/ceramic setting, 168 MHz/USB 48 MHz clocks, SWD, TIM6 HAL timebase, FreeRTOS CMSIS v2. The scaffold also enables USB Host MSC, which creates a fourth, library-owned task. Confirm the selected HSE path on the actual board; bypass is for the ST-LINK MCO path. | Three application LEDs blink; HAL and RTOS ticks advance. |
+| 2a | Create the first bounded UI event queue and pass startup events from audio and storage. | Add `UiEventQueue`, eight `AppEvent` items, dynamic allocation in FreeRTOS. | Blue LED turns on after both events; existing heartbeats continue. |
+| 2b | Measure queue, heap, and task stack use, including the USB helper task, and set the RAM budget. | Set the USB Host process stack to 1024 bytes after measuring only 76 bytes spare at 512. | Inspect measured headroom with and without a USB drive. |
 | 3 | Initialize the LCD and send basic SPI commands. | SPI1 PB3/PB5; PD0/PD1/PD2 outputs. | Show solid colors on the panel. |
 | 4 | Add LVGL display buffers and SPI TX DMA flushing. | DMA2 Stream3 Channel 3, normal mode. | Repeated redraws finish without a stuck flush. |
 | 5 | Read encoder turns and debounced presses. | TIM1 encoder PE9/PE11 with filters; PE13 pull-up input. | Show turn and press counts on the LCD. |
@@ -63,6 +64,22 @@ Use your proposed `UiTask`, `AudioTask`, and `StorageTask`. Each task owns one s
 | 29 | Stop capture, drain remaining blocks, fix the header, close, and rename to `.WAV`. | None. | Open the result in a PC player and this device’s browser. |
 | 30 | Add the browser **Record WAV** action and recording screen; press starts and press stops. | None. | Perform the complete recording flow with the encoder. |
 | 31 | Handle full drive, USB removal, and repeated play/record cycles. | None. | Confirm useful errors, no overwritten WAV, and no task or buffer failures. |
+
+## Checkpoint 2b RAM baseline
+
+Debug build with a USB drive enumerated (`APPLICATION_READY`, `HOST_CLASS`):
+
+| Resource | Allocated | Measured |
+| --- | ---: | ---: |
+| FreeRTOS heap | 24,576 B | 8,456 B minimum free |
+| C heap | Grows above linker `_end` | 268 B peak growth |
+| Storage task stack | 6,144 B | 5,872 B minimum unused |
+| Audio task stack | 4,096 B | 3,924 B minimum unused |
+| UI task stack | 4,096 B | 3,896 B minimum unused |
+| USB host task stack | 1,024 B | 588 B minimum unused |
+| UI event queue payload | 8 × 8 B | 64 B |
+
+The linker uses 32,432 B of the 128 KiB main RAM region, including the fixed FreeRTOS heap and linker heap/stack reservations. The C heap measurement tracks runtime growth; do not add it directly to the linker figure. Treat the 8,456 B of unallocated FreeRTOS heap as the current dynamic allocation budget. Recheck stack and heap headroom as LCD, file I/O, playback, and recording workloads are added.
 
 ## Defaults and gates
 
