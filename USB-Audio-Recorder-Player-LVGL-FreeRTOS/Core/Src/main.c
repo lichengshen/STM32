@@ -26,6 +26,7 @@
 #include <stddef.h>
 #include "app_events.h"
 #include "app_memory.h"
+#include "tft.h"
 #include "FreeRTOS.h"
 #include "portable.h"
 #include "usbh_core.h"
@@ -369,7 +370,7 @@ static void MX_SPI1_Init(void)
   hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
   hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
   hspi1.Init.NSS = SPI_NSS_SOFT;
-  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_2;
+  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_16;
   hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
   hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
   hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
@@ -414,6 +415,9 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(GPIOD, LD4_Pin|LD3_Pin|LD5_Pin|LD6_Pin
                           |Audio_RST_Pin, GPIO_PIN_RESET);
 
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOD, TFT_CS_Pin|TFT_DC_Pin|TFT_RES_Pin, GPIO_PIN_SET);
+
   /*Configure GPIO pin : CS_I2C_SPI_Pin */
   GPIO_InitStruct.Pin = CS_I2C_SPI_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
@@ -457,9 +461,9 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_Init(CLK_IN_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pins : LD4_Pin LD3_Pin LD5_Pin LD6_Pin
-                           Audio_RST_Pin */
+                           TFT_CS_Pin TFT_DC_Pin TFT_RES_Pin Audio_RST_Pin */
   GPIO_InitStruct.Pin = LD4_Pin|LD3_Pin|LD5_Pin|LD6_Pin
-                          |Audio_RST_Pin;
+                          |TFT_CS_Pin|TFT_DC_Pin|TFT_RES_Pin|Audio_RST_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -548,8 +552,17 @@ void StartAudioTask(void *argument)
 void StartUiTask(void *argument)
 {
   /* USER CODE BEGIN StartUiTask */
+  /* Red, green, blue in RGB565. */
+  static const uint16_t colors[] = {0xF800U, 0x07E0U, 0x001FU};
+  uint8_t color_index = 0U;
+  uint8_t color_ticks = 0U;
   uint32_t started_sources = 0;
   AppEvent event;
+
+  if (!Tft_Init(&hspi1) || !Tft_FillScreen(colors[color_index]))
+  {
+    AppFail(APP_FAULT_DISPLAY_SPI);
+  }
 
   /* Orange LED: UI task is running. */
   for(;;)
@@ -570,6 +583,15 @@ void StartUiTask(void *argument)
 
     HAL_GPIO_TogglePin(GPIOD, LD3_Pin);
     osDelay(500);
+    if (++color_ticks == 4U)
+    {
+      color_ticks = 0U;
+      color_index = (color_index + 1U) % 3U;
+      if (!Tft_FillScreen(colors[color_index]))
+      {
+        AppFail(APP_FAULT_DISPLAY_SPI);
+      }
+    }
     AppUpdateMemoryStats();
   }
   /* USER CODE END StartUiTask */
