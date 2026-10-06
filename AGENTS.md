@@ -24,6 +24,15 @@ An HW-040 rotary encoder is also connected. The pins are connected as:
 | GND    | P2-2          | GND             |
 | +      | P2-4          | 5V              |
 
+A CH340 USB-to-UART adapter connects the PC to USART2. It uses 3.3 V UART logic. The pins are connected as:
+
+| CH340 | Discovery Pin | STM32 Pin / Function |
+| ----- | ------------- | -------------------- |
+| TXD   | P1-13         | PA3 / USART2_RX      |
+| RXD   | P1-14         | PA2 / USART2_TX      |
+| GND   | P1-2          | GND                  |
+| VCC   | Not connected | Not connected        |
+
 A USB flash drive is connected to the discovery kit, plugged into the CN5 connector via a USB A to micro USB adapter.
 
 ## Code Template
