@@ -4,7 +4,8 @@
 
 This project tests the STM32's real-time clock (RTC), while  the local date and time are synchronized with the PC through UART.
 
-A Python script sends the PC's current local time through a CH340 USB-to-UART adapter. The firmware sets the RTC and displays the date and time as plain text on the ILI9341 LCD. After synchronization, the RTC advances independently of the PC. The running calendar is preserved across resets while the board remains powered, using a marker in an RTC backup register. We use the LSI clock source since the STM32F407G-DISC1 does not have the LSE crystal mounted.
+A Python script sends the PC's current local time through a CH340 USB-to-UART adapter. The firmware sets the RTC and displays the date and time as plain text on the ILI9341 LCD. After synchronization, the RTC advances independently of the PC. The running calendar is preserved across resets while the board remains powered, using a marker in an RTC backup register. ~~We use the LSI clock source since the STM32F407G-DISC1 does not have the LSE crystal mounted.~~
+We now use the 8 MHz HSE crystal to reduce the drift observed with LSI. To do: Measure the LSI frequency with TIM5 channel 4, see page 160 of the RM0090 manual.
 
 ## Usage
 
