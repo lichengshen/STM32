@@ -26,7 +26,7 @@
 #include <stddef.h>
 #include "app_events.h"
 #include "app_memory.h"
-#include "tft.h"
+#include "lvgl/lvgl.h"
 #include "FreeRTOS.h"
 #include "portable.h"
 #include "usbh_core.h"
@@ -40,7 +40,9 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define LCD_H_RES       240
+#define LCD_V_RES       320
+#define BUS_SPI1_POLL_TIMEOUT 0x1000U
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -54,6 +56,7 @@ I2C_HandleTypeDef hi2c1;
 I2S_HandleTypeDef hi2s3;
 
 SPI_HandleTypeDef hspi1;
+DMA_HandleTypeDef hdma_spi1_tx;
 
 /* Definitions for StorageTask */
 osThreadId_t StorageTaskHandle;
@@ -73,7 +76,7 @@ const osThreadAttr_t AudioTask_attributes = {
 osThreadId_t UiTaskHandle;
 const osThreadAttr_t UiTask_attributes = {
   .name = "UiTask",
-  .stack_size = 1024 * 4,
+  .stack_size = 1536 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* Definitions for UiEventQueue */
@@ -87,12 +90,15 @@ extern uint8_t _end;
 extern void *_sbrk(ptrdiff_t incr);
 volatile AppFault app_fault_code = APP_FAULT_NONE;
 volatile AppMemoryStats app_memory_stats;
+lv_display_t *lcd_disp;
+volatile int lcd_bus_busy = 0;
 
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
+static void MX_DMA_Init(void);
 static void MX_I2C1_Init(void);
 static void MX_I2S3_Init(void);
 static void MX_SPI1_Init(void);
@@ -167,6 +173,7 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();
   MX_I2C1_Init();
   MX_I2S3_Init();
   MX_SPI1_Init();
@@ -386,6 +393,22 @@ static void MX_SPI1_Init(void)
 }
 
 /**
+  * Enable DMA controller clock
+  */
+static void MX_DMA_Init(void)
+{
+
+  /* DMA controller clock enable */
+  __HAL_RCC_DMA2_CLK_ENABLE();
+
+  /* DMA interrupt init */
+  /* DMA2_Stream3_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA2_Stream3_IRQn, 5, 0);
+  HAL_NVIC_EnableIRQ(DMA2_Stream3_IRQn);
+
+}
+
+/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -416,7 +439,7 @@ static void MX_GPIO_Init(void)
                           |Audio_RST_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOD, TFT_CS_Pin|TFT_DC_Pin|TFT_RES_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(GPIOD, LCD_CS_Pin|LCD_DCX_Pin|LCD_RESET_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin : CS_I2C_SPI_Pin */
   GPIO_InitStruct.Pin = CS_I2C_SPI_Pin;
@@ -461,9 +484,9 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_Init(CLK_IN_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pins : LD4_Pin LD3_Pin LD5_Pin LD6_Pin
-                           TFT_CS_Pin TFT_DC_Pin TFT_RES_Pin Audio_RST_Pin */
+                           LCD_CS_Pin LCD_DCX_Pin LCD_RESET_Pin Audio_RST_Pin */
   GPIO_InitStruct.Pin = LD4_Pin|LD3_Pin|LD5_Pin|LD6_Pin
-                          |TFT_CS_Pin|TFT_DC_Pin|TFT_RES_Pin|Audio_RST_Pin;
+                          |LCD_CS_Pin|LCD_DCX_Pin|LCD_RESET_Pin|Audio_RST_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -487,7 +510,87 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+void lcd_color_transfer_ready_cb(SPI_HandleTypeDef *hspi)
+{
+        /* CS high */
+        HAL_GPIO_WritePin(LCD_CS_GPIO_Port, LCD_CS_Pin, GPIO_PIN_SET);
+        lcd_bus_busy = 0;
+        lv_display_flush_ready(lcd_disp);
+}
 
+/* Initialize LCD I/O bus, reset LCD */
+static int32_t lcd_io_init(void)
+{
+        /* Register SPI Tx Complete Callback */
+        HAL_StatusTypeDef status = HAL_SPI_RegisterCallback(
+                &hspi1, HAL_SPI_TX_COMPLETE_CB_ID, lcd_color_transfer_ready_cb);
+        if (status != HAL_OK)
+        {
+                return status;
+        }
+
+        /* reset LCD */
+        HAL_GPIO_WritePin(LCD_RESET_GPIO_Port, LCD_RESET_Pin, GPIO_PIN_RESET);
+        osDelay(100);
+        HAL_GPIO_WritePin(LCD_RESET_GPIO_Port, LCD_RESET_Pin, GPIO_PIN_SET);
+        osDelay(100);
+
+        HAL_GPIO_WritePin(LCD_CS_GPIO_Port, LCD_CS_Pin, GPIO_PIN_SET);
+        HAL_GPIO_WritePin(LCD_DCX_GPIO_Port, LCD_DCX_Pin, GPIO_PIN_SET);
+
+        return HAL_OK;
+}
+
+/* Platform-specific implementation of the LCD send command function. In general this should use polling transfer. */
+static void lcd_send_cmd(lv_display_t *disp, const uint8_t *cmd, size_t cmd_size, const uint8_t *param, size_t param_size)
+{
+        LV_UNUSED(disp);
+        while (lcd_bus_busy);   /* wait until previous transfer is finished */
+        /* Set the SPI in 8-bit mode */
+        hspi1.Init.DataSize = SPI_DATASIZE_8BIT;
+        HAL_SPI_Init(&hspi1);
+        /* DCX low (command) */
+        HAL_GPIO_WritePin(LCD_DCX_GPIO_Port, LCD_DCX_Pin, GPIO_PIN_RESET);
+        /* CS low */
+        HAL_GPIO_WritePin(LCD_CS_GPIO_Port, LCD_CS_Pin, GPIO_PIN_RESET);
+        /* send command */
+        if (HAL_SPI_Transmit(&hspi1, cmd, cmd_size, BUS_SPI1_POLL_TIMEOUT) == HAL_OK) {
+                /* DCX high (data) */
+                HAL_GPIO_WritePin(LCD_DCX_GPIO_Port, LCD_DCX_Pin, GPIO_PIN_SET);
+                /* for short data blocks we use polling transfer */
+                HAL_SPI_Transmit(&hspi1, (uint8_t *)param, (uint16_t)param_size, BUS_SPI1_POLL_TIMEOUT);
+                /* CS high */
+                HAL_GPIO_WritePin(LCD_CS_GPIO_Port, LCD_CS_Pin, GPIO_PIN_SET);
+        }
+}
+
+/* Platform-specific implementation of the LCD send color function. For better performance this should use DMA transfer.
+ * In case of a DMA transfer a callback must be installed to notify LVGL about the end of the transfer.
+ */
+static void lcd_send_color(lv_display_t *disp, const uint8_t *cmd, size_t cmd_size, uint8_t *param, size_t param_size)
+{
+        LV_UNUSED(disp);
+        while (lcd_bus_busy);   /* wait until previous transfer is finished */
+        /* Set the SPI in 8-bit mode */
+        hspi1.Init.DataSize = SPI_DATASIZE_8BIT;
+        HAL_SPI_Init(&hspi1);
+        /* DCX low (command) */
+        HAL_GPIO_WritePin(LCD_DCX_GPIO_Port, LCD_DCX_Pin, GPIO_PIN_RESET);
+        /* CS low */
+        HAL_GPIO_WritePin(LCD_CS_GPIO_Port, LCD_CS_Pin, GPIO_PIN_RESET);
+        /* send command */
+        if (HAL_SPI_Transmit(&hspi1, cmd, cmd_size, BUS_SPI1_POLL_TIMEOUT) == HAL_OK) {
+                /* DCX high (data) */
+                HAL_GPIO_WritePin(LCD_DCX_GPIO_Port, LCD_DCX_Pin, GPIO_PIN_SET);
+                /* for color data use DMA transfer */
+                /* Set the SPI in 16-bit mode to match endianness */
+                hspi1.Init.DataSize = SPI_DATASIZE_16BIT;
+                HAL_SPI_Init(&hspi1);
+                lcd_bus_busy = 1;
+                HAL_SPI_Transmit_DMA(&hspi1, param, (uint16_t)param_size / 2);
+                /* NOTE: CS will be reset in the transfer ready callback */
+        }
+}
 /* USER CODE END 4 */
 
 /* USER CODE BEGIN Header_StartStorageTask */
@@ -552,19 +655,50 @@ void StartAudioTask(void *argument)
 void StartUiTask(void *argument)
 {
   /* USER CODE BEGIN StartUiTask */
-  /* Red, green, blue in RGB565. */
-  static const uint16_t colors[] = {0xF800U, 0x07E0U, 0x001FU};
-  uint8_t color_index = 0U;
-  uint8_t color_ticks = 0U;
   uint32_t started_sources = 0;
   AppEvent event;
 
-  if (!Tft_Init(&hspi1) || !Tft_FillScreen(colors[color_index]))
+  lv_init();
+  lv_tick_set_cb(HAL_GetTick);
+  if (lcd_io_init() != HAL_OK)
   {
     AppFail(APP_FAULT_DISPLAY_SPI);
   }
 
-  /* Orange LED: UI task is running. */
+  /* Portrait display with RGB color order. */
+  lcd_disp = lv_ili9341_create(LCD_H_RES, LCD_V_RES,
+                             LV_LCD_FLAG_NONE,
+                             lcd_send_cmd, lcd_send_color);
+  if (lcd_disp == NULL)
+  {
+    AppFail(APP_FAULT_DISPLAY_MEMORY);
+  }
+
+  /* Two 10-row RGB565 buffers: 4,800 bytes each from the LVGL pool. */
+  const uint32_t buf_size = LCD_H_RES * LCD_V_RES / 10 * lv_color_format_get_size(lv_display_get_color_format(lcd_disp));
+  void *buf1 = lv_malloc(buf_size);
+  void *buf2 = lv_malloc(buf_size);
+  if (buf1 == NULL || buf2 == NULL)
+  {
+    AppFail(APP_FAULT_DISPLAY_MEMORY);
+  }
+  lv_display_set_buffers(lcd_disp, buf1, buf2, buf_size,
+                         LV_DISPLAY_RENDER_MODE_PARTIAL);
+
+  lv_obj_t *screen = lv_display_get_screen_active(lcd_disp);
+  lv_obj_set_style_bg_color(screen, lv_color_white(), 0);
+  lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
+  lv_obj_t *label = lv_label_create(screen);
+  if (label == NULL)
+  {
+    AppFail(APP_FAULT_DISPLAY_MEMORY);
+  }
+  lv_label_set_text(label, "Hello World!");
+  lv_obj_set_style_text_color(label, lv_color_hex(0xFF0000), 0);
+  lv_obj_set_style_text_font(label, &lv_font_montserrat_14, 0);
+  lv_obj_center(label);
+
+  uint32_t last_status_tick = HAL_GetTick();
   for(;;)
   {
     osStatus_t status = osMessageQueueGet(UiEventQueueHandle, &event, NULL, 0);
@@ -581,18 +715,15 @@ void StartUiTask(void *argument)
       AppFail(APP_FAULT_QUEUE_RECEIVE);
     }
 
-    HAL_GPIO_TogglePin(GPIOD, LD3_Pin);
-    osDelay(500);
-    if (++color_ticks == 4U)
+    lv_timer_handler();
+    uint32_t now = HAL_GetTick();
+    if (now - last_status_tick >= 500U)
     {
-      color_ticks = 0U;
-      color_index = (color_index + 1U) % 3U;
-      if (!Tft_FillScreen(colors[color_index]))
-      {
-        AppFail(APP_FAULT_DISPLAY_SPI);
-      }
+      last_status_tick = now;
+      HAL_GPIO_TogglePin(GPIOD, LD3_Pin);
+      AppUpdateMemoryStats();
     }
-    AppUpdateMemoryStats();
+    osDelay(10U);
   }
   /* USER CODE END StartUiTask */
 }

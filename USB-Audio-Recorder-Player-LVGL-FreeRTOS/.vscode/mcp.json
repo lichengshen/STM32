@@ -1,0 +1,9 @@
+{
+	"servers": {
+		"lvgl-mcp": {
+			"url": "https://lvgl.mcp.kapa.ai/",
+			"type": "http"
+		}
+	},
+	"inputs": []
+}

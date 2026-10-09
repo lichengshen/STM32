@@ -1,3 +1,6 @@
 [submodule "USB-Audio-Player-LVGL/Middlewares/Third_Party/lvgl"]
 	path = USB-Audio-Player-LVGL/Middlewares/Third_Party/lvgl
 	url = https://github.com/lvgl/lvgl.git
+[submodule "USB-Audio-Recorder-Player-LVGL-FreeRTOS/Middlewares/Third_Party/lvgl"]
+	path = USB-Audio-Recorder-Player-LVGL-FreeRTOS/Middlewares/Third_Party/lvgl
+	url = https://github.com/lvgl/lvgl.git
