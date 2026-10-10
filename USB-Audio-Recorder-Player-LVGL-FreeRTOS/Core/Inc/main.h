@@ -77,6 +77,8 @@ void Error_Handler(void);
 #define I2S3_WS_GPIO_Port GPIOA
 #define BOOT1_Pin GPIO_PIN_2
 #define BOOT1_GPIO_Port GPIOB
+#define ENCODER_SW_Pin GPIO_PIN_13
+#define ENCODER_SW_GPIO_Port GPIOE
 #define CLK_IN_Pin GPIO_PIN_10
 #define CLK_IN_GPIO_Port GPIOB
 #define LD4_Pin GPIO_PIN_12

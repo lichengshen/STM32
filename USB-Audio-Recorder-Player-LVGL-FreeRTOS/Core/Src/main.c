@@ -26,6 +26,7 @@
 #include <stddef.h>
 #include "app_events.h"
 #include "app_memory.h"
+#include "encoder.h"
 #include "lvgl/lvgl.h"
 #include "FreeRTOS.h"
 #include "portable.h"
@@ -57,6 +58,8 @@ I2S_HandleTypeDef hi2s3;
 
 SPI_HandleTypeDef hspi1;
 DMA_HandleTypeDef hdma_spi1_tx;
+
+TIM_HandleTypeDef htim1;
 
 /* Definitions for StorageTask */
 osThreadId_t StorageTaskHandle;
@@ -102,6 +105,7 @@ static void MX_DMA_Init(void);
 static void MX_I2C1_Init(void);
 static void MX_I2S3_Init(void);
 static void MX_SPI1_Init(void);
+static void MX_TIM1_Init(void);
 void StartStorageTask(void *argument);
 void StartAudioTask(void *argument);
 void StartUiTask(void *argument);
@@ -142,6 +146,25 @@ static void AppUpdateMemoryStats(void)
   app_memory_stats.sample_count++;
 }
 
+static void EncoderRead(lv_indev_t *indev, lv_indev_data_t *data)
+{
+  (void)indev;
+  data->enc_diff = Encoder_ReadDelta();
+  data->state = Encoder_IsPressed() ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
+}
+
+static void ButtonClicked(lv_event_t *event)
+{
+  static uint32_t click_count = 0;
+  lv_obj_t *status_label = lv_event_get_user_data(event);
+  lv_obj_t *button = lv_event_get_target_obj(event);
+  lv_obj_t *label = lv_obj_get_child(button, 0);
+
+  click_count++;
+  lv_label_set_text_fmt(status_label, "Last: %s | Clicks: %lu",
+                       lv_label_get_text(label), (unsigned long)click_count);
+}
+
 /* USER CODE END 0 */
 
 /**
@@ -177,6 +200,7 @@ int main(void)
   MX_I2C1_Init();
   MX_I2S3_Init();
   MX_SPI1_Init();
+  MX_TIM1_Init();
   /* USER CODE BEGIN 2 */
 
   /* USER CODE END 2 */
@@ -393,6 +417,56 @@ static void MX_SPI1_Init(void)
 }
 
 /**
+  * @brief TIM1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM1_Init(void)
+{
+
+  /* USER CODE BEGIN TIM1_Init 0 */
+
+  /* USER CODE END TIM1_Init 0 */
+
+  TIM_Encoder_InitTypeDef sConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+
+  /* USER CODE BEGIN TIM1_Init 1 */
+
+  /* USER CODE END TIM1_Init 1 */
+  htim1.Instance = TIM1;
+  htim1.Init.Prescaler = 0;
+  htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim1.Init.Period = 65535;
+  htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim1.Init.RepetitionCounter = 0;
+  htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  sConfig.EncoderMode = TIM_ENCODERMODE_TI1;
+  sConfig.IC1Polarity = TIM_ICPOLARITY_RISING;
+  sConfig.IC1Selection = TIM_ICSELECTION_DIRECTTI;
+  sConfig.IC1Prescaler = TIM_ICPSC_DIV1;
+  sConfig.IC1Filter = 15;
+  sConfig.IC2Polarity = TIM_ICPOLARITY_RISING;
+  sConfig.IC2Selection = TIM_ICSELECTION_DIRECTTI;
+  sConfig.IC2Prescaler = TIM_ICPSC_DIV1;
+  sConfig.IC2Filter = 15;
+  if (HAL_TIM_Encoder_Init(&htim1, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim1, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM1_Init 2 */
+
+  /* USER CODE END TIM1_Init 2 */
+
+}
+
+/**
   * Enable DMA controller clock
   */
 static void MX_DMA_Init(void)
@@ -474,6 +548,12 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(BOOT1_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : ENCODER_SW_Pin */
+  GPIO_InitStruct.Pin = ENCODER_SW_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(ENCODER_SW_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pin : CLK_IN_Pin */
   GPIO_InitStruct.Pin = CLK_IN_Pin;
@@ -658,6 +738,11 @@ void StartUiTask(void *argument)
   uint32_t started_sources = 0;
   AppEvent event;
 
+  if (!Encoder_Init(&htim1))
+  {
+    AppFail(APP_FAULT_ENCODER_START);
+  }
+
   lv_init();
   lv_tick_set_cb(HAL_GetTick);
   if (lcd_io_init() != HAL_OK)
@@ -674,7 +759,7 @@ void StartUiTask(void *argument)
     AppFail(APP_FAULT_DISPLAY_MEMORY);
   }
 
-  /* Two 10-row RGB565 buffers: 4,800 bytes each from the LVGL pool. */
+  /* Two 1/10-screen RGB565 buffers: 15,360 bytes each from the LVGL pool. */
   const uint32_t buf_size = LCD_H_RES * LCD_V_RES / 10 * lv_color_format_get_size(lv_display_get_color_format(lcd_disp));
   void *buf1 = lv_malloc(buf_size);
   void *buf2 = lv_malloc(buf_size);
@@ -688,15 +773,66 @@ void StartUiTask(void *argument)
   lv_obj_t *screen = lv_display_get_screen_active(lcd_disp);
   lv_obj_set_style_bg_color(screen, lv_color_white(), 0);
   lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
-  lv_obj_t *label = lv_label_create(screen);
-  if (label == NULL)
+  lv_group_t *group = lv_group_create();
+  lv_indev_t *encoder = lv_indev_create();
+  if (group == NULL || encoder == NULL)
+  {
+    AppFail(APP_FAULT_UI_INPUT_MEMORY);
+  }
+  lv_group_set_editing(group, false);
+  lv_group_set_wrap(group, true);
+
+  lv_obj_t *status_label = lv_label_create(screen);
+  if (status_label == NULL)
   {
     AppFail(APP_FAULT_DISPLAY_MEMORY);
   }
-  lv_label_set_text(label, "Hello World!");
-  lv_obj_set_style_text_color(label, lv_color_hex(0xFF0000), 0);
-  lv_obj_set_style_text_font(label, &lv_font_montserrat_14, 0);
-  lv_obj_center(label);
+  lv_label_set_text(status_label, "Clicks: 0");
+  lv_obj_set_style_text_color(status_label, lv_color_hex(0xFF0000), 0);
+  lv_obj_set_style_text_font(status_label, &lv_font_montserrat_14, 0);
+  lv_obj_align(status_label, LV_ALIGN_TOP_MID, 0, 16);
+
+  const char *const button_names[] = {"Item 1", "Item 2", "Item 3"};
+  for (uint32_t i = 0; i < 3U; i++)
+  {
+    lv_obj_t *button = lv_button_create(screen);
+    if (button == NULL)
+    {
+      AppFail(APP_FAULT_DISPLAY_MEMORY);
+    }
+    lv_obj_set_size(button, 180, 48);
+    lv_obj_align(button, LV_ALIGN_CENTER, 0, ((int32_t)i - 1) * 64);
+    lv_obj_set_style_bg_color(button, lv_color_white(), 0);
+    lv_obj_set_style_border_width(button, 2, 0);
+    lv_obj_set_style_border_color(button, lv_color_hex(0xAAAAAA), 0);
+    lv_obj_set_style_border_color(button, lv_color_hex(0xFF0000), LV_STATE_FOCUSED);
+    /* Show our red focus border instead of the theme's keyboard outline. */
+    lv_obj_set_style_outline_width(button, 0, LV_STATE_FOCUS_KEY);
+
+    lv_obj_t *label = lv_label_create(button);
+    if (label == NULL)
+    {
+      AppFail(APP_FAULT_DISPLAY_MEMORY);
+    }
+    lv_label_set_text(label, button_names[i]);
+    lv_obj_set_style_text_color(label, lv_color_hex(0xFF0000), 0);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_14, 0);
+    lv_obj_center(label);
+    if (lv_obj_add_event_cb(button, ButtonClicked, LV_EVENT_CLICKED, status_label) == NULL)
+    {
+      AppFail(APP_FAULT_UI_INPUT_MEMORY);
+    }
+    lv_group_add_obj(group, button);
+    if (i == 0U)
+    {
+      lv_group_focus_obj(button);
+    }
+  }
+
+  lv_indev_set_type(encoder, LV_INDEV_TYPE_ENCODER);
+  lv_indev_set_read_cb(encoder, EncoderRead);
+  lv_indev_set_display(encoder, lcd_disp);
+  lv_indev_set_group(encoder, group);
 
   uint32_t last_status_tick = HAL_GetTick();
   for(;;)
@@ -715,6 +851,7 @@ void StartUiTask(void *argument)
       AppFail(APP_FAULT_QUEUE_RECEIVE);
     }
 
+    Encoder_PollButton();
     lv_timer_handler();
     uint32_t now = HAL_GetTick();
     if (now - last_status_tick >= 500U)

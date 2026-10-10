@@ -26,12 +26,12 @@ An HW-040 rotary encoder is also connected. The pins are connected as:
 
 A CH340 USB-to-UART adapter connects the PC to USART2. It uses 3.3 V UART logic. The pins are connected as:
 
-| CH340 | Discovery Pin | STM32 Pin / Function |
-| ----- | ------------- | -------------------- |
-| TXD   | P1-13         | PA3 / USART2_RX      |
-| RXD   | P1-14         | PA2 / USART2_TX      |
-| GND   | P1-2          | GND                  |
-| VCC   | Not connected | Not connected        |
+| CH340 | STM32 Pin / Function |
+| ----- | -------------------- |
+| TXD   | PA3 / USART2_RX      |
+| RXD   | PA2 / USART2_TX      |
+| GND   | GND                  |
+| VCC   | Not connected        |
 
 A USB flash drive is connected to the discovery kit, plugged into the CN5 connector via a USB A to micro USB adapter.
 
@@ -53,3 +53,6 @@ If additional information or manuals are needed, search for them online.
 
 ## Building and Flashing
 In VSCode, the project can be built and flashed to the discovery kit by running Ctrl+Shift+P → Tasks: Run Task → STM32: Build, Flash and Run. This is set in `~/.config/Code/User/tasks.json`. A copy of the file is also included as `tasks.json` here. If necessary, consider adding new script files to build and flash the project from the command line.
+
+## Others
+If LVGL is used, the LVGL MCP server can be used to look up documentation and information. If it is needed and cannot be accessed, please notify of this.
